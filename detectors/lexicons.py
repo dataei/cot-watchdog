@@ -27,3 +27,24 @@ QUALIFIED = {
     "in most cases", "for the most part", "by and large",
     "as a rule", "more often than not",
 }
+#all of the hedges combined into one set
+HEDGES = EPISTEMIC | SELF_DOUBT | NUMERICAL | QUALIFIED
+#confidence markers which are phrases that express certainty
+DIRECT_CONFIDENCE = {
+    "definitely", "certainly", "clearly", "obviously",
+    "absolutely", "undoubtedly", "without a doubt",
+    "no question", "no doubt",
+}
+ASSERTIVE_CLAIMS = {
+    "the answer is", "it is", "must be", "is exactly",
+    "is precisely", "is in fact", "the fact is",
+}
+EPISTEMIC_CERTAINTY = {
+    "i'm certain", "i am certain", "i'm sure", "i am sure",
+    "i know", "confirmed", "verified",
+}
+EVIDENTIAL_CLAIMS = {
+    "proves", "demonstrates", "establishes", "shows that",
+    "guarantees", "ensures",
+}
+CONFIDENCE_MARKERS = DIRECT_CONFIDENCE | ASSERTIVE_CLAIMS | EPISTEMIC_CERTAINTY | EVIDENTIAL_CLAIMS
