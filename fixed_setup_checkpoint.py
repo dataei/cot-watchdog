@@ -145,7 +145,7 @@ def check_latency():
     #we are recording
     # need this number for the pitch and for
     #budgeting detector overhead
-    return f"avg {avg:.2fs}s per step over {len(times)} calls"
+    return f"avg {avg:.2f}s per step over {len(times)} calls"
 
 #check 5 is openshell audit log exists and is writable
 @check("Watchdog timeline writable")
