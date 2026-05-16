@@ -1,7 +1,68 @@
+#Python
 __pycache__/
-.env
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+#Virtual environments
 .venv/
-models/
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+*.egg
+
+#CoT Watchdog specific
+
+#SQLite databases from agent runs (regenerated each run)
+watchdog_memory.db
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+#HuggingFace model cache (these are huge — 438MB+ per model)
+.cache/
+huggingface/
+
+#Local model files if cached in the repo for any reason
+*.gguf
 *.safetensors
 *.bin
-.cache/
+*.pt
+*.pth
+
+#IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+#Logs and temp files
+*.log
+logs/
+tmp/
+temp/
+
+#OpenShell / NemoClaw audit logs
+#(these may contain sensitive run data; don't commit)
+audit.log
+.nemoclaw/
+
+#Jupyter (in case anyone uses it for exploration)
+.ipynb_checkpoints/
+*.ipynb
+
+#Secrets
+.env
+.env.local
+*.pem
+*.key
+credentials.json
