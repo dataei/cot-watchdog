@@ -107,17 +107,37 @@ def parse_agent_output(raw_output: str) -> dict:
         "final_text": post_think.strip(),
     }
 #stub tools
+_search_call_count = {"n": 0}
+
 def tool_web_search(query: str) -> str:
-    return (
-        f"[stub web_search result for '{query}'] "
-        f"Three relevant papers found. Key findings include methodology X and result Y."
-    )
+    """Stub that returns staged responses so the agent makes progress."""
+    _search_call_count["n"] += 1
+    n = _search_call_count["n"]
+
+    if n == 1:
+        return (
+            "[stub web_search] Three relevant papers found:\n"
+            "1. Zhou et al. (2024) 'Pedestrian Intent at Unsignalized Crosswalks' — "
+            "uses a transformer-based model with pose estimation and gaze features.\n"
+            "2. Kim et al. (2023) 'Hybrid GNN for Pedestrian Behavior Prediction' — "
+            "graph neural network combining vehicle and pedestrian trajectories.\n"
+            "3. Rao et al. (2024) 'Multi-Sensor Pedestrian Intent Prediction' — "
+            "Bayesian fusion of LiDAR, radar, and camera data."
+        )
+    elif n == 2:
+        return (
+            "[stub web_search] Methodology details for the three papers:\n"
+            "Zhou et al.: Transformer architecture with 8 attention heads, "
+            "trained on JAAD dataset, 92% accuracy.\n"
+            "Kim et al.: 4-layer GNN with edge features for proximity, "
+            "validated on PIE dataset.\n"
+            "Rao et al.: Late-fusion Bayesian network, real-time inference at 30 Hz."
+        )
+    else:
+        return f"[stub web_search] No new results for '{query}'. Try summarizing what you have."
+
 def tool_notes_write(text: str) -> str:
-    return f"[stub note saved] {text[:60]}..."
-TOOLS = {
-    "web_search": tool_web_search,
-    "notes_write": tool_notes_write,
-}
+    return f"[stub note saved] {text[:100]}..."
 def execute_tool(tool_call: dict) -> str:
     #Run the tool after policy check
     name = tool_call["name"]

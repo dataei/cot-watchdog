@@ -19,16 +19,16 @@ STRUCTURED_INTENT = re.compile(
 #built dynamically from VERB_TO_TOOL so adding new verbs there 
 #auto extends the pattern
 _verb_alternation = "|".join(sorted(VERB_TO_TOOL.keys(), key=len, reverse=True))
-VERB_INTENT = re.compile(
+VEVERB_INTENT = re.compile(
     r"\b(?:"
     r"I'll|I will|let me|next,?\s*I'll|I'm going to|going to|"
     r"i need to|i should|my next step is to|let's|"
-    r"the right move is to|"
-    r"the best (?:next )?(?:step|move|action|approach) is to|"
-    r"i plan to|i intend to|my plan is to|"
-    r"i'll just|let me just"
+    r"the next step is to|the next step would be to|"
+    r"i'll just|let me just|let me try|let's try|"
+    r"the right move is to|the best (?:next )?(?:step|move|action) is to|"
+    r"i plan to|i intend to|my plan is to|i want to|i'm gonna"
     r")\s+"
-    r"(?:just |simply |actually |now )?"
+    r"(?:just |simply |actually |now |a )?"
     r"(" + _verb_alternation + r")\b",
     re.IGNORECASE,
 )
