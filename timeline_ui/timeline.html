@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>CoT Watchdog — Audit Timeline</title>
+  <style>
+    :root {
+      --bg: #0d1117;
+      --panel: #161b22;
+      --border: #30363d;
+      --text: #c9d1d9;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --green: #3fb950;
+      --yellow: #d29922;
+      --red: #f85149;
+      --critical: #ff6b6b;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", monospace;
+      background: var(--bg);
+      color: var(--text);
+      padding: 24px;
+      line-height: 1.5;
+    }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    .subtitle { color: var(--muted); margin-bottom: 24px; font-size: 14px; }
+    .layout { display: grid; grid-template-columns: 280px 1fr; gap: 24px; }
+    .sidebar {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+      height: fit-content;
+      position: sticky;
+      top: 24px;
+    }
+    .sidebar h2 { font-size: 13px; text-transform: uppercase; color: var(--muted); margin: 0 0 12px; letter-spacing: 0.5px; }
+    .task-item {
+      padding: 10px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-bottom: 6px;
+      transition: background 0.15s;
+      font-size: 13px;
+    }
+    .task-item:hover { background: rgba(88,166,255,0.1); }
+    .task-item.active { background: rgba(88,166,255,0.2); border-left: 3px solid var(--accent); }
+    .task-goal { color: var(--text); margin-bottom: 4px; }
+    .task-meta { color: var(--muted); font-size: 11px; }
+    .main {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 24px;
+    }
+    .empty-state { color: var(--muted); text-align: center; padding: 60px 20px; }
+    .task-header { margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+    .task-header .goal { font-size: 18px; margin-bottom: 8px; }
+    .task-header .meta { color: var(--muted); font-size: 13px; }
+    .status-badge {
+      display: inline-block;
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      margin-left: 8px;
+    }
+    .status-completed { background: rgba(63,185,80,0.2); color: var(--green); }
+    .status-halted { background: rgba(248,81,73,0.2); color: var(--red); }
+    .status-running { background: rgba(88,166,255,0.2); color: var(--accent); }
+
+    .step {
+      border-left: 3px solid var(--border);
+      padding: 12px 16px 16px 20px;
+      margin-bottom: 12px;
+      position: relative;
+    }
+    .step.has-flag { border-left-color: var(--red); background: rgba(248,81,73,0.04); }
+    .step-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .step-number {
+      background: var(--border);
+      color: var(--text);
+      padding: 2px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .step.has-flag .step-number { background: var(--red); color: white; }
+    .step-tool {
+      color: var(--accent);
+      font-family: monospace;
+      font-size: 13px;
+    }
+    .step-reasoning {
+      background: rgba(0,0,0,0.2);
+      border-radius: 4px;
+      padding: 10px 12px;
+      font-size: 13px;
+      color: var(--muted);
+      margin: 8px 0;
+      white-space: pre-wrap;
+      font-family: monospace;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    .flag {
+      background: rgba(248,81,73,0.08);
+      border: 1px solid rgba(248,81,73,0.3);
+      border-radius: 6px;
+      padding: 12px;
+      margin-top: 10px;
+    }
+    .flag-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .flag-detector {
+      font-weight: 600;
+      text-transform: uppercase;
+      font-size: 12px;
+      letter-spacing: 0.5px;
+    }
+    .flag-detector.goal_drift { color: #d29922; }
+    .flag-detector.hedge { color: #58a6ff; }
+    .flag-detector.mismatch { color: var(--red); }
+    .flag-severity {
+      background: var(--border);
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+    }
+    .flag-reason { font-size: 13px; margin-bottom: 8px; }
+    .flag-decision {
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      display: inline-block;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .flag-decision.approve { background: rgba(63,185,80,0.2); color: var(--green); }
+    .flag-decision.deny { background: rgba(248,81,73,0.2); color: var(--red); }
+    .flag-evidence {
+      font-family: monospace;
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 8px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--border);
+    }
+    .audit-section {
+      margin-top: 32px;
+      padding-top: 24px;
+      border-top: 1px solid var(--border);
+    }
+    .audit-section h2 { font-size: 14px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px; }
+    .audit-entry {
+      font-family: monospace;
+      font-size: 12px;
+      padding: 8px 12px;
+      background: rgba(0,0,0,0.2);
+      border-left: 3px solid var(--critical);
+      margin-bottom: 6px;
+      border-radius: 4px;
+    }
+    .audit-entry .tool { color: var(--critical); font-weight: 600; }
+    .audit-entry .reason { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <h1>CoT Watchdog</h1>
+  <div class="subtitle">Post-hoc audit timeline for autonomous agent reasoning</div>
+
+  <div class="layout">
+    <aside class="sidebar">
+      <h2>Tasks</h2>
+      <div id="task-list"></div>
+    </aside>
+    <main class="main">
+      <div id="content">
+        <div class="empty-state">Select a task to view its timeline</div>
+      </div>
+    </main>
+  </div>
+
+  <script>
+    const taskList = document.getElementById("task-list");
+    const content = document.getElementById("content");
+    let activeTaskId = null;
+
+    async function loadTasks() {
+      const tasks = await fetch("/api/tasks").then(r => r.json());
+      if (tasks.length === 0) {
+        taskList.innerHTML = '<div style="color: var(--muted); font-size: 13px;">No tasks yet. Run agent_loop.py.</div>';
+        return;
+      }
+      taskList.innerHTML = tasks.map(t => `
+        <div class="task-item" data-task-id="${t.task_id}">
+          <div class="task-goal">${truncate(t.goal, 50)}</div>
+          <div class="task-meta">${t.task_id} · ${t.final_status || "running"}</div>
+        </div>
+      `).join("");
+      taskList.querySelectorAll(".task-item").forEach(el => {
+        el.addEventListener("click", () => loadTimeline(el.dataset.taskId));
+      });
+      // Auto-load the first task
+      if (tasks[0]) loadTimeline(tasks[0].task_id);
+    }
+
+    async function loadTimeline(taskId) {
+      activeTaskId = taskId;
+      taskList.querySelectorAll(".task-item").forEach(el => {
+        el.classList.toggle("active", el.dataset.taskId === taskId);
+      });
+      const [timeline, audit] = await Promise.all([
+        fetch(`/api/timeline/${taskId}`).then(r => r.json()),
+        fetch(`/api/audit`).then(r => r.json()),
+      ]);
+      renderTimeline(timeline, audit);
+    }
+
+    function renderTimeline(data, auditEntries) {
+      const { task, steps, flags } = data;
+      const flagsByStep = {};
+      for (const f of flags) {
+        if (!flagsByStep[f.step_index]) flagsByStep[f.step_index] = [];
+        flagsByStep[f.step_index].push(f);
+      }
+
+      const statusClass = task.final_status === "completed" ? "status-completed"
+        : task.final_status === "halted" ? "status-halted" : "status-running";
+      const statusLabel = task.final_status || "running";
+
+      let html = `
+        <div class="task-header">
+          <div class="goal">${escapeHtml(task.goal)}<span class="status-badge ${statusClass}">${statusLabel}</span></div>
+          <div class="meta">Task ID: ${task.task_id} · ${steps.length} steps · ${flags.length} flags</div>
+        </div>
+      `;
+
+      for (const step of steps) {
+        const stepFlags = flagsByStep[step.step_index] || [];
+        const hasFlag = stepFlags.length > 0;
+        const toolStr = step.tool_name
+          ? `${step.tool_name}(${truncate(step.tool_args || "", 60)})`
+          : "(no tool call)";
+
+        html += `
+          <div class="step ${hasFlag ? 'has-flag' : ''}">
+            <div class="step-header">
+              <span class="step-number">Step ${step.step_index + 1}</span>
+              <span class="step-tool">${escapeHtml(toolStr)}</span>
+            </div>
+            <details>
+              <summary style="cursor:pointer;font-size:12px;color:var(--muted);">Show reasoning trace</summary>
+              <div class="step-reasoning">${escapeHtml(step.reasoning)}</div>
+            </details>
+            ${stepFlags.map(f => renderFlag(f)).join("")}
+          </div>
+        `;
+      }
+
+      // Audit log section
+      const criticalDenials = auditEntries.filter(e =>
+        e.event === "policy_denial" && e.severity === "critical"
+      );
+      if (criticalDenials.length > 0) {
+        html += `
+          <div class="audit-section">
+            <h2>OpenShell Audit — Critical Denials</h2>
+            ${criticalDenials.map(e => `
+              <div class="audit-entry">
+                <div><span class="tool">${escapeHtml(e.tool_name)}(${escapeHtml(e.tool_args)})</span></div>
+                <div class="reason">${escapeHtml(e.reason)}</div>
+              </div>
+            `).join("")}
+          </div>
+        `;
+      }
+
+      content.innerHTML = html;
+    }
+
+    function renderFlag(flag) {
+      const decisionClass = flag.human_decision === "approve" ? "approve"
+        : flag.human_decision === "deny" ? "deny" : "";
+      const decisionLabel = flag.human_decision || "no decision";
+      const evidenceJson = JSON.stringify(flag.evidence, null, 2);
+      return `
+        <div class="flag">
+          <div class="flag-header">
+            <span class="flag-detector ${flag.detector}">${flag.detector}</span>
+            <span class="flag-severity">severity ${flag.severity.toFixed(2)}</span>
+          </div>
+          <div class="flag-reason">${escapeHtml(flag.reason)}</div>
+          <span class="flag-decision ${decisionClass}">${decisionLabel}</span>
+          <details>
+            <summary style="cursor:pointer;font-size:11px;color:var(--muted);margin-top:8px;">Show evidence</summary>
+            <div class="flag-evidence">${escapeHtml(evidenceJson)}</div>
+          </details>
+        </div>
+      `;
+    }
+
+    function truncate(s, n) {
+      if (!s) return "";
+      return s.length > n ? s.slice(0, n) + "…" : s;
+    }
+    function escapeHtml(s) {
+      if (typeof s !== "string") s = JSON.stringify(s);
+      return s.replace(/[&<>"']/g, c => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[c]));
+    }
+
+    loadTasks();
+    setInterval(loadTasks, 5000);  // auto-refresh list every 5 seconds
+  </script>
+</body>
+</html>
