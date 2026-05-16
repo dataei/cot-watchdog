@@ -182,3 +182,26 @@ TEST_CASES = [
         ),
     },
 ]
+def run_tests():
+    passed = 0
+    failed = 0
+    for case in TEST_CASES:
+        result = detect_hedge_miscalibration(case["trace"], context={})
+        actual = "flag" if result is not None else "no_flag"
+        status = "PASS" if actual == case["expect"] else "FAIL"
+        if status == "PASS":
+            passed += 1
+        else:
+            failed += 1
+        print(f"  [{status}] {case['name']}")
+        if status == "FAIL":
+            print(f"    expected: {case['expect']}, got: {actual}")
+            if result:
+                print(f"    density: {result.evidence['hedge_density']:.3f}")
+                print(f"    confidence: {result.evidence['confidence_markers_found']}")
+    print(f"\n  {passed} passed, {failed} failed")
+    return failed == 0
+
+
+if __name__ == "__main__":
+    run_tests()
