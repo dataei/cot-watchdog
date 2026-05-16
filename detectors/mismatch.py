@@ -25,3 +25,61 @@ VERB_INTENT = re.compile(
     r"(" + _verb_alternation + r")\b",
     re.IGNORECASE,
 )
+def extract_stated_intent(reasoning_trace: str) -> dict | None:
+    #pull structured intent out of natural language reasoning trace
+    #returns
+    # {"tool": <tool_name>, "source": "structured" | "semantic", ...} if found
+    #    None if no intent could be extracted
+    #uses two strategies tried in order
+    #first look for explicit "INTENT: tool(args)" line (structured)
+    #second look for verb patterns like "I'll search" (semantic)
+    #when multiple intents are delcared the last one wins
+    #handles cases like "I could search, but actually I'll just write a note"
+    #where the agent considers and rejects an option before commiting
+    #strategy one is structured intent line
+    structured_matches = list(STRUCTURED_INTENT.finditer(reasoning_trace))
+    if structured_matches:
+        last = structured_matches[-1]
+        return {
+            "tool": last.group(1).lower(),
+            "source": "structured",
+        }
+    #strategy two is verb pattern
+    verb_matches = list(VERB_INTENT.finditer(reasoning_trace))
+    if verb_matches:
+        last = verb_matches[-1]
+        verb = last.group(1).lower()
+        tool = VERB_TO_TOOL.get(verb)
+        if tool:
+            return {
+                "tool": tool,
+                "source": "semantic",
+                "verb": verb,
+            }
+
+    return None
+
+from detectors.common import Flag
+def detect_mismatch(reasoning_trace: str, context: dict) -> Flag | None:
+    #compare agents stated intent extracted from reasoning against 
+    #the actual tool call it made, flag when theyb diverge 
+    #args:
+        #reasoning_trace is the agent's reasoning text for this step
+        # context: must contain "tool_call", which is either:
+        #     - {"name": str, "args": str} if a tool was called
+        #     - None if the step was pure reasoning
+        # Returns:
+        # None if intent matches the call (or there's nothing to compare)
+        # Flag if there's a mismatch or a silent action
+        tool_call = context.get("tool_call")
+        #case one is no ctool calls this step
+        #the agent just reasoned without acting, nothing to compare against
+        #so return None
+        if tool_call is None:
+            return None
+        actual_tool = tool_call.get("name", "").lower()
+        if not actual_tool:
+            #malformed tool_call entry, skip instead of flag randomly
+            return None
+        #use extractor from earlier
+        intent = extract_stated_intent(reasoning_trace)
