@@ -42,4 +42,31 @@ def detect_goal_drift(reasoning_trace: str, context: dict) -> Flag | None:
     #severity scales with how far below threshold we are, capped at 1.0
     #a similarity of 0.45 -> severity 0.55. a similarity of 0.10 -> severity 0.90
     base_severity = 1.0 - similarity
-    
+    #check if drift is sustained, basically were the last few steps also low?
+    recent_sims = [h["similarity"] for h in history[-SUSTAINED_WINDOW:]]
+    sustained = (
+        len(recent_sims) >= SUSTAINED_WINDOW - 1
+        and all(s < GOAL_DRIFT_THRESHOLD for s in recent_sims)
+    )
+    #sustained drift gets a severity bump, a one-off dip might be a brief
+    #tangent; sustained low similarity is a real drift
+    severity = min(1.0, base_severity + (0.15 if sustained else 0.0))
+    reason = (
+        f"Reasoning has drifted from the original goal "
+        f"(similarity {similarity:.2f}, threshold {GOAL_DRIFT_THRESHOLD})."
+    )
+    if sustained:
+        reason += f" This is the {SUSTAINED_WINDOW}th step in a row below threshold."
+    return Flag(
+        detector="goal_drift",
+        severity=severity,
+        reason=reason,
+        evidence={
+            "similarity": similarity,
+            "threshold": GOAL_DRIFT_THRESHOLD,
+            "sustained": sustained,
+            "recent_similarities": recent_sims,
+            "goal": goal,
+            "step_excerpt": reasoning_trace[:200],
+        },
+    )
