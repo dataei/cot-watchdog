@@ -16,3 +16,8 @@ SELF_DOUBT = {
     "unsure", "uncertain", "i don't know", "hard to tell",
     "hard to say",
 }
+#numerical hedging: estimated quantities 
+NUMERICAL = {
+    "roughly", "approximately", "around", "about", "somewhere",
+    "ish", "sort of", "kind of", "more or less", "give or take",
+}
