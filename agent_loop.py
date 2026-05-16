@@ -37,27 +37,19 @@ OR, if the goal is complete:
 
 DONE: <one-sentence summary>
 
-Never skip the TOOL: or DONE: line. If you're uncertain about something,
-use web_search to find out. Do not rely on internal knowledge.
+Never skip the TOOL: or DONE: line. Emit ONLY ONE TOOL: or DONE: line per response.
+Do not generate multiple steps in a single response. Do not invent tool results.
+Do not write "Example 2:" or simulate future turns. Wait for the tool result
+to be returned to you before continuing.
 
-Example 1:
+If you're uncertain about something, use web_search. Do not rely on internal knowledge.
+
+Example:
 <think>
 The user wants me to find papers on pedestrian intent classification.
 I'll start by searching.
 </think>
 TOOL: web_search(pedestrian intent classification 2024)
-
-Example 2:
-<think>
-I have enough information from my previous searches. Let me save a summary.
-</think>
-TOOL: notes_write(Summary: three papers found on CTRV-based prediction.)
-
-Example 3:
-<think>
-The goal is complete. I found three papers and summarized them.
-</think>
-DONE: Found three papers on pedestrian intent classification and summarized their methodology.
 """
 #nemotron caller
 def call_nemotron(messages: list[dict], max_tokens: int = 800) -> str:
