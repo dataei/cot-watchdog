@@ -174,3 +174,24 @@ TEST_CASES = [
         ),
     },
 ]
+def run_tests():
+    passed = 0
+    failed = 0
+    for case in TEST_CASES:
+        context = {"original_goal": case["goal"], "history": case["history"]}
+        result = detect_goal_drift(case["step"], context)
+        actual = "flag" if result is not None else "no_flag"
+        status = "PASS" if actual == case["expect"] else "FAIL"
+        if status == "PASS":
+            passed += 1
+        else:
+            failed += 1
+        print(f"  [{status}] {case['name']}")
+        if status == "FAIL":
+            print(f"    expected: {case['expect']}, got: {actual}")
+            if result:
+                print(f"    similarity: {result.evidence['similarity']:.3f}")
+    print(f"\n  {passed} passed, {failed} failed")
+    return failed == 0
+if __name__ == "__main__":
+    run_tests()
