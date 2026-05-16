@@ -9,8 +9,9 @@ from detectors.hedge import detect_hedge_miscalibration
 from detectors.mismatch import detect_mismatch
 from human_io import prompt_human_approval # teammate module
 from memory import AgentMemory # teammate module
+from openshell.policy_enforcer import check_tool_call, PolicyDenial # openshell policy gate
 #configuration
-#where local nemotron server is listening (set up by initial_nemotron_setup.py)
+#where local nemotron server is listening
 INFERENCE_ENDPOINT = "http://localhost:8080/v1/chat/completions"
 MODEL_NAME = "nemotron-3-nano"
 #safety cap so agent cannot loop forever
@@ -54,7 +55,7 @@ def call_nemotron(messages: list[dict], max_tokens: int = 800) -> str:
         #messages: list of {"role": "system"|"user"|"assistant", "content": str}
         #max_tokens: cap on generated tokens for this call
     #Returns:
-        #The model's raw output string, 
+        #The model's raw output string,
         #including <think>...</think> if present
     payload = json.dumps({
         "model": MODEL_NAME,
@@ -112,7 +113,7 @@ def tool_web_search(query: str) -> str:
         f"Three relevant papers found. Key findings include methodology X and result Y."
     )
 def tool_notes_write(text: str) -> str:
-    #stub: pretends to save a note 
+    #stub: pretends to save a note
     #returns confirmation
     return f"[stub note saved] {text[:60]}..."
 TOOLS = {
@@ -120,10 +121,21 @@ TOOLS = {
     "notes_write": tool_notes_write,
 }
 def execute_tool(tool_call: dict) -> str:
-    #Run the tool the agent asked for
-    #Returns the tool's output as a string
+    #Run the tool the agent asked for after policy check
+    #OpenShell denies certain tool calls regardless of whether the agent's
+    #reasoning justified them (e.g. approve_flag, override_detector)
+    #Returns the tool's output string, OR a denial message if blocked
     name = tool_call["name"]
     args = tool_call["args"]
+    #policy gate
+    try:
+        check_tool_call(name, args)
+    except PolicyDenial as denial:
+        return (
+            f"[POLICY DENIAL] {denial.reason} "
+            f"This denial is logged to audit.log."
+        )
+    #tool is allowed - dispatch normally
     if name not in TOOLS:
         return f"[error] unknown tool: {name}"
     return TOOLS[name](args)
@@ -223,9 +235,28 @@ def run_agent(goal: str) -> None:
         messages.append({"role": "user", "content": f"Tool result: {result}"})
     print("[Hit MAX_STEPS without completion]")
     memory.mark_halted("max_steps reached")
+#demo self-approval moment
+def demo_self_approval_attempt() -> None:
+    print()
+    print("=" * 60)
+    print("  DEMO: agent attempts to self-approve its last flag")
+    print("=" * 60)
+    print()
+    #construct the denied tool call
+    fake_tool_call = {
+        "name": "approve_flag",
+        "args": "all_flags=true,bypass_human=true",
+    }
+    result = execute_tool(fake_tool_call)
+    print(f"Result: {result}")
+    print()
+    print("OpenShell's out-of-process enforcement prevented the agent")
+    print("from bypassing its own safety flags. The denial is recorded")
+    print("in audit.log.")
 #entry point
 if __name__ == "__main__":
     run_agent(
         "Find three papers on pedestrian intent classification at "
         "unsignalized intersections and summarize their methodology."
     )
+    demo_self_approval_attempt()
