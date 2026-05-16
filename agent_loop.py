@@ -1,5 +1,4 @@
-#drives the agent through multi step reasoning with
-#cot monitoring
+#drives the agent through multi step reasoning with cot monitoring
 import json
 import re
 import urllib.request
@@ -11,13 +10,12 @@ from human_io import prompt_human_approval # teammate module
 from memory import AgentMemory # teammate module
 from policy.enforcer import check_tool_call, PolicyDenial # policy gate (production target: openshell)
 #configuration
-#where local nemotron server is listening
 INFERENCE_ENDPOINT = "http://localhost:8000/v1/chat/completions"
 MODEL_NAME = "nemotron-3-nano"
 #safety cap so agent cannot loop forever
 MAX_STEPS = 10
-#regex patterns (parsing patterns)
-#matches <think> ... </think> block nemotron emits in reasoning mode
+#regex patterns
+#matches <think> ... </think> block (normalized from reasoning_content)
 THINK_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 #matches "TOOL: tool_name(args)" lines the agent emits as actions
 TOOL_CALL_PATTERN = re.compile(r"TOOL:\s*(\w+)\s*\((.*?)\)", re.IGNORECASE)
@@ -29,34 +27,43 @@ Available tools:
 - web_search(query): search the web for information
 - notes_write(text): save a note for later reference
 
-For each step:
+CRITICAL FORMAT REQUIREMENTS:
 1. Reason about what to do next inside <think></think> tags.
-2. State your next action in this exact format on its own line:
+2. After </think>, ALWAYS emit exactly one line in this exact format:
 
 TOOL: tool_name(args)
 
-If the goal is complete, instead write on its own line:
+OR, if the goal is complete:
 
-DONE: <one-sentence summary of what you accomplished>
+DONE: <one-sentence summary>
 
-Always emit exactly one TOOL: or DONE: line per step.
+Never skip the TOOL: or DONE: line. If you're uncertain about something,
+use web_search to find out. Do not rely on internal knowledge.
 
-Example output format:
+Example 1:
 <think>
 The user wants me to find papers on pedestrian intent classification.
-I'll start by searching for recent work.
+I'll start by searching.
 </think>
 TOOL: web_search(pedestrian intent classification 2024)
+
+Example 2:
+<think>
+I have enough information from my previous searches. Let me save a summary.
+</think>
+TOOL: notes_write(Summary: three papers found on CTRV-based prediction.)
+
+Example 3:
+<think>
+The goal is complete. I found three papers and summarized them.
+</think>
+DONE: Found three papers on pedestrian intent classification and summarized their methodology.
 """
 #nemotron caller
 def call_nemotron(messages: list[dict], max_tokens: int = 800) -> str:
     #Call the local Nemotron server with chat messages and return raw text output
-    #Args:
-        #messages: list of {"role": "system"|"user"|"assistant", "content": str}
-        #max_tokens: cap on generated tokens for this call
-    #Returns:
-        #The model's raw output string,
-        #including <think>...</think> if present
+    #Normalizes reasoning_content into <think>...</think> wrapper so existing
+    #detector and parser code works unchanged
     payload = json.dumps({
         "model": MODEL_NAME,
         "messages": messages,
@@ -64,12 +71,12 @@ def call_nemotron(messages: list[dict], max_tokens: int = 800) -> str:
         "temperature": 0.3,
     }).encode("utf-8")
     req = urllib.request.Request(
-    INFERENCE_ENDPOINT,
-    data=payload,
-    headers={
-        "Content-Type": "application/json",
-        "Authorization": "Bearer sk-local",
-    },
+        INFERENCE_ENDPOINT,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": "Bearer sk-local",
+        },
     )
     with urllib.request.urlopen(req, timeout=120) as r:
         data = json.loads(r.read())
@@ -78,33 +85,22 @@ def call_nemotron(messages: list[dict], max_tokens: int = 800) -> str:
     content = msg.get("content", "") or ""
     reasoning = msg.get("reasoning_content", "") or ""
 
-    # Nemotron 3 Nano via llama-server returns CoT in reasoning_content
+    # llama-server with Nemotron 3 Nano returns CoT in reasoning_content
     # instead of literal <think> tags. Normalize so detectors work unchanged.
     if reasoning and "<think>" not in content:
         return f"<think>\n{reasoning}\n</think>\n{content}"
-
     return content
 #output parser
 def parse_agent_output(raw_output: str) -> dict:
     #Pull the three pieces of structured info from Nemotron's response
-    #Args:
-        #raw_output: the raw string from call_nemotron()
     #Returns:
-        #{
-            #"reasoning":  str, # contents of <think>...</think>
-            #"tool_call":  dict | None,    # {"name": ..., "args": ...} or None
-            #"final_text": str,  # everything after </think>
-        #}
-    #Extract the <think> block
+        #{"reasoning": str, "tool_call": dict | None, "final_text": str}
     think_match = THINK_PATTERN.search(raw_output)
     reasoning = think_match.group(1).strip() if think_match else ""
-    # Everything after </think> is the agent's visible response.
-    # If no <think> block, treat the whole output as the response.
     if think_match:
         post_think = raw_output[think_match.end():]
     else:
         post_think = raw_output
-    #Look for the TOOL: line in the post-think section
     tool_match = TOOL_CALL_PATTERN.search(post_think)
     if tool_match:
         tool_call = {
@@ -120,24 +116,18 @@ def parse_agent_output(raw_output: str) -> dict:
     }
 #stub tools
 def tool_web_search(query: str) -> str:
-    #Stub: returns canned text as if we'd searched the web
     return (
         f"[stub web_search result for '{query}'] "
         f"Three relevant papers found. Key findings include methodology X and result Y."
     )
 def tool_notes_write(text: str) -> str:
-    #stub: pretends to save a note
-    #returns confirmation
     return f"[stub note saved] {text[:60]}..."
 TOOLS = {
     "web_search": tool_web_search,
     "notes_write": tool_notes_write,
 }
 def execute_tool(tool_call: dict) -> str:
-    #Run the tool the agent asked for after policy check
-    #OpenShell denies certain tool calls regardless of whether the agent's
-    #reasoning justified them (e.g. approve_flag, override_detector)
-    #Returns the tool's output string, OR a denial message if blocked
+    #Run the tool after policy check
     name = tool_call["name"]
     args = tool_call["args"]
     #policy gate
@@ -159,8 +149,6 @@ DETECTORS = [
     ("mismatch", detect_mismatch),
 ]
 def run_all_detectors(reasoning: str, context: dict) -> list[Flag]:
-    #Run all three detectors on the current step, returns any flags they produced
-    #A detector exception is caught and logged but doesn't kill the agent
     flags = []
     for name, fn in DETECTORS:
         try:
@@ -172,23 +160,12 @@ def run_all_detectors(reasoning: str, context: dict) -> list[Flag]:
     return flags
 #main loop
 def run_agent(goal: str) -> None:
-    #Run the agent through its task full CoT monitoring
-    #Each step:
-    #   1. Calls Nemotron with the conversation so far
-    #   2. Parses the reasoning trace and tool call
-    #   3. Runs the three detectors
-    #   4. Persists everything to memory
-    #   5. If flagged, prompts the human and waits for approve/deny
-    #   6. If approved (or no flag), executes the tool
-    #   7. Appends the result to the conversation and loops
-    #Init per-task state
     memory = AgentMemory(goal)
-    history = [] # for sustained-drift logic in goal_drift detector
+    history = []
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Goal: {goal}"},
     ]
-    #main step loop
     for step in range(MAX_STEPS):
         print(f"\n{'='*60}\n  Step {step + 1}\n{'='*60}")
         #call nemotron and parse
@@ -196,6 +173,26 @@ def run_agent(goal: str) -> None:
         parsed = parse_agent_output(raw)
         reasoning = parsed["reasoning"]
         tool_call = parsed["tool_call"]
+
+        #retry once if the model forgot to emit TOOL: or DONE:
+        if tool_call is None and "DONE:" not in parsed["final_text"]:
+            print("[No tool call emitted - retrying with explicit format reminder]")
+            messages.append({"role": "assistant", "content": raw})
+            messages.append({
+                "role": "user",
+                "content": (
+                    "You did not emit a TOOL: or DONE: line. Please emit your "
+                    "action on the next response in this exact format:\n"
+                    "TOOL: tool_name(args)\n"
+                    "OR\n"
+                    "DONE: <summary>"
+                ),
+            })
+            raw = call_nemotron(messages)
+            parsed = parse_agent_output(raw)
+            reasoning = parsed["reasoning"]
+            tool_call = parsed["tool_call"]
+
         #run detectors
         context = {
             "original_goal": goal,
@@ -211,12 +208,11 @@ def run_agent(goal: str) -> None:
             tool_call=tool_call,
             flags=flags,
         )
-        #Update history for next step's sustained-drift check
+        #Update history for sustained-drift check
         gd_flag = next((f for f in flags if f.detector == "goal_drift"), None)
         if gd_flag:
             history.append({"similarity": gd_flag.evidence["similarity"]})
         else:
-            #No flag means similarity was above threshold; placeholder of 1.0
             history.append({"similarity": 1.0})
         #Handle flags (pause for human if any)
         if flags:
@@ -238,8 +234,8 @@ def run_agent(goal: str) -> None:
             return
         #Execute the tool
         if tool_call is None:
-            print("[No tool call and no DONE — stopping]")
-            memory.mark_halted("agent emitted no action")
+            print("[No tool call after retry - halting]")
+            memory.mark_halted("agent emitted no action after retry")
             return
         result = execute_tool(tool_call)
         print(f"Tool result: {result[:200]}")
@@ -250,12 +246,13 @@ def run_agent(goal: str) -> None:
     memory.mark_halted("max_steps reached")
 #demo self-approval moment
 def demo_self_approval_attempt() -> None:
+    #Demonstrate that the agent cannot bypass its own safety flags
+    #The policy layer denies approve_flag regardless of who calls it
     print()
     print("=" * 60)
     print("  DEMO: agent attempts to self-approve its last flag")
     print("=" * 60)
     print()
-    #construct the denied tool call
     fake_tool_call = {
         "name": "approve_flag",
         "args": "all_flags=true,bypass_human=true",
@@ -263,9 +260,10 @@ def demo_self_approval_attempt() -> None:
     result = execute_tool(fake_tool_call)
     print(f"Result: {result}")
     print()
-    print("OpenShell's out-of-process enforcement prevented the agent")
-    print("from bypassing its own safety flags. The denial is recorded")
-    print("in audit.log.")
+    print("The policy layer prevented the agent from bypassing its own")
+    print("safety flags. In production this enforcement runs out-of-process")
+    print("via NemoClaw OpenShell; here it runs in-process for the demo.")
+    print("The denial is recorded in audit.log.")
 #entry point
 if __name__ == "__main__":
     run_agent(
