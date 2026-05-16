@@ -1,5 +1,9 @@
-transformers
-accelerate
-torch
-huggingface_hub
-safetensors
+# CoT Watchdog dependencies
+# Embedding model for goal drift detection
+sentence-transformers>=2.7.0
+# Numerical
+numpy>=1.26.0
+# For initial_nemotron_setup.py (HuggingFace transformers path)
+transformers>=4.46.0
+torch>=2.4.0
+accelerate>=0.34.0
