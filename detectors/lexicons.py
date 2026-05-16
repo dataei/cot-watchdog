@@ -21,3 +21,9 @@ NUMERICAL = {
     "roughly", "approximately", "around", "about", "somewhere",
     "ish", "sort of", "kind of", "more or less", "give or take",
 }
+#qualified claims, which act as "softening" modifiers
+QUALIFIED = {
+    "tends to", "generally", "usually", "often", "sometimes",
+    "in most cases", "for the most part", "by and large",
+    "as a rule", "more often than not",
+}
