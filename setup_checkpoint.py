@@ -14,7 +14,7 @@ import os
 import re
 import sys
 import time
-import pathlib import Path
+from pathlib import Path
 
 #where our nemotron inference server is running
 #all expose OpenAI-compatible endpoints, point it
@@ -98,3 +98,145 @@ def check_nemotron_basic():
     text = call_nemotron("Say hello in five words.")
     assert text and len(text) > 0, "empty response"
     return f"got {len(text)} chars"
+
+@check("Nemotron emits <think> reasoning trace")
+def check_think_tokens():
+    #a prompt that would reliably produce reasoning
+    #adjust if reasoning parser config strips <think> tokens
+    #in that situation we need to fix our server flags
+    #for example: --reasoning_parser nano-v3
+    text = call_nemotron(
+        "A train leaves Chicago at 3pm going 60mph. Another leaves "
+        "St. Louis at 4pm going 50mph. When do they meet? Show your reasoning."
+    )
+    match = THINK_PATTERN.search(text)
+    assert match, (
+        f"no <think>...</think> block found. Check your reasoning-parser "
+        f"config. Response started with: {text[:200]!r}"
+    )
+    trace = match.group(1).strip()
+    assert len(trace) > 20, f"think block too short: {trace!r}"
+    return f"think block: {len(trace)} chars"
+
+#check 4 is single step latency (informational for US, will not fail)
+@check("Measure single-step latency")
+def check_latency():
+    prompts = [
+        "What is 17 times 23? Think step by step.",
+        "List three colors and explain why you chose them.",
+        "Summarize the concept of recursion in one paragraph.",
+    ]
+    times = []
+    for p in prompts:
+        t0 = time.time()
+        call_nemotron(p, max_tokens=256)
+        times.append(time.time() - t0)
+    avg = sum(times) / len(times)
+    #not asserting a threshold
+    #we are recording
+    # need this number for the pitch and for
+    #budgeting detector overhead
+    return f"avg {avg:.2fs}s per step over {len(times)} calls"
+
+#check 5 is openshell audit log exists and is writable
+@check("OpenShell audit log accessible")
+def check_audit_log():
+    assert OPENSHELL_AUDIT_LOG.exists(), (
+        f"audit log not found at {OPENSHELL_AUDIT_LOG}. Check NemoClaw install "
+        f"or update the OPENSHELL_AUDIT_LOG constant in this script."
+    )
+    size = OPENSHELL_AUDIT_LOG.stat().st_size
+    return f"{OPENSHELL_AUDIT_LOG} ({size} bytes)"
+
+#check 6 is embedding model loads for goal drift detector
+@check("Embedding model loads locally")
+def check_embeddings():
+    # sentence-transformers is easiest path
+    # all-MiniLM-L6-v2 is 80MB
+    # and fast enough to not bottleneck the agent loop
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError:
+        raise AssertionError(
+            "sentence-transformers not installed. Run: "
+            "pip install sentence-transformers"
+        )
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+    v1 = model.encode("the cat sat on the mat")
+    v2 = model.encode("a feline was on the rug")
+    v3 = model.encode("quantum mechanics is weird")
+    # Sanity check: similar sentences should be more similar than unrelated ones
+    import numpy as np
+    sim_close = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+    sim_far = np.dot(v1, v3) / (np.linalg.norm(v1) * np.linalg.norm(v3))
+    assert sim_close > sim_far, (
+        f"embedding sanity check failed: close={sim_close:.3f} far={sim_far:.3f}"
+    )
+    return f"close={sim_close:.3f} far={sim_far:.3f}"
+
+#check 7 is one full agent step end-to-end
+#this is the integration moment
+#we do not require a real tool
+#we just require that the model can produce a structured
+#"I will call tool X with args Y" output that we will later parse
+#if our openclaw agent is already wired up we need
+#to replace this with an actual agent.run() call
+@check("Full reasoning + tool-intent extraction")
+def check_full_step():
+    prompt = (
+        "You are an agent with these tools: web_search(query), notes_write(text).\n"
+        "Goal: find out who won the 2024 Nobel Prize in Physics.\n"
+        "Think through your next step, then state EXACTLY which tool you'll call "
+        "and with what arguments, in the form: TOOL: <name>(<args>)"
+    )
+    text = call_nemotron(prompt, max_tokens=512)
+    think_match = THINK_PATTERN.search(text)
+    assert think_match, "no reasoning trace in agent-style call"
+    #look for tool-call line, this is what the reasoning-action
+    #mismatch detector will parse
+    tool_match = re.search(r"TOOL:\s*(\w+)\s*\((.*?)\)", text)
+    assert tool_match, (
+        f"no TOOL: line found in response. Response tail: ...{text[-300:]!r}"
+    )
+    tool_name = tool_match.group(1)
+    return f"reasoning + tool call ({tool_name}) parsed cleanly"
+
+#summary below
+if __name__ == "__main__":
+    print("=" * 60)
+    print(" CoT Watchdog Setup Checkpoint")
+    print(f" Started: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 60)
+    #run checks in order
+    #order matters
+    #gpu -> server -> model -> embeddings -> integration
+    #if gpu fails nothing else works
+    check_gpu()
+    check_server()
+    check_nemotron_basic()
+    check_think_tokens()
+    check_latency()
+    check_audit_log()
+    check_embeddings()
+    check_full_step()
+    print("\n" + "=" * 60)
+    print(" SUMMARY")
+    print("=" * 60)
+    passed = sum(1 for _, ok, _, _ in results if ok)
+    total = len(results)
+    for name, ok, elapsed, detail in results:
+        status = "PASS" if ok else "FAIL"
+        print(f"  [{status}] {name:<45} {elapsed:.2f}s")
+
+    print(f"\n  {passed}/{total} checks passed")
+
+    if passed == total:
+        print("\n  GREEN. Move to detector work.")
+        sys.exit(0)
+    else:
+        print("\n  RED. Fix failures before 8 PM checkpoint.")
+        print("  Failures:")
+        for name, ok, _, detail in results:
+            if not ok:
+                print(f"    - {name}: {detail}")
+        sys.exit(1)
