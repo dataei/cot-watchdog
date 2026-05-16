@@ -12,7 +12,7 @@ from memory import AgentMemory # teammate module
 from policy.enforcer import check_tool_call, PolicyDenial # policy gate (production target: openshell)
 #configuration
 #where local nemotron server is listening
-INFERENCE_ENDPOINT = "http://localhost:8080/v1/chat/completions"
+INFERENCE_ENDPOINT = "http://localhost:8000/v1/chat/completions"
 MODEL_NAME = "nemotron-3-nano"
 #safety cap so agent cannot loop forever
 MAX_STEPS = 10
@@ -64,13 +64,26 @@ def call_nemotron(messages: list[dict], max_tokens: int = 800) -> str:
         "temperature": 0.3,
     }).encode("utf-8")
     req = urllib.request.Request(
-        INFERENCE_ENDPOINT,
-        data=payload,
-        headers={"Content-Type": "application/json"},
+    INFERENCE_ENDPOINT,
+    data=payload,
+    headers={
+        "Content-Type": "application/json",
+        "Authorization": "Bearer sk-local",
+    },
     )
     with urllib.request.urlopen(req, timeout=120) as r:
         data = json.loads(r.read())
-    return data["choices"][0]["message"]["content"]
+
+    msg = data["choices"][0]["message"]
+    content = msg.get("content", "") or ""
+    reasoning = msg.get("reasoning_content", "") or ""
+
+    # Nemotron 3 Nano via llama-server returns CoT in reasoning_content
+    # instead of literal <think> tags. Normalize so detectors work unchanged.
+    if reasoning and "<think>" not in content:
+        return f"<think>\n{reasoning}\n</think>\n{content}"
+
+    return content
 #output parser
 def parse_agent_output(raw_output: str) -> dict:
     #Pull the three pieces of structured info from Nemotron's response

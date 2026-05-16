@@ -19,7 +19,7 @@ from pathlib import Path
 #where our nemotron inference server is running
 #all expose OpenAI-compatible endpoints, point it
 #to what we use
-INFERENCE_ENDPOINT = "http://localhost:8080/v1/chat/completions"
+INFERENCE_ENDPOINT = "http://localhost:8000/v1/chat/completions"
 MODEL_NAME = "nemotron-3-nano"
 #this is where our openshell writes its audit log
 #check nemoclaw docs for exact path in our install
