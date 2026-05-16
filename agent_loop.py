@@ -9,7 +9,7 @@ from detectors.hedge import detect_hedge_miscalibration
 from detectors.mismatch import detect_mismatch
 from human_io import prompt_human_approval # teammate module
 from memory import AgentMemory # teammate module
-from openshell.policy_enforcer import check_tool_call, PolicyDenial # openshell policy gate
+from policy.enforcer import check_tool_call, PolicyDenial # policy gate (production target: openshell)
 #configuration
 #where local nemotron server is listening
 INFERENCE_ENDPOINT = "http://localhost:8080/v1/chat/completions"

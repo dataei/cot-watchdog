@@ -1,0 +1,105 @@
+# =============================================================================
+# CoT Watchdog — Policy
+# =============================================================================
+#
+# This policy defines the tool-call rules for the CoT Watchdog agent.
+#
+# Target deployment: NemoClaw with OpenShell out-of-process enforcement.
+# This guarantees the agent cannot disable its own guardrails because the
+# policy layer lives outside the agent process entirely.
+#
+# Current deployment: NemoClaw is in alpha (announced GTC 2026, March 16)
+# and the integration wasn't viable on the ASUS Ascent GX10 during our
+# build window. We run the same policy in-process via policy/enforcer.py
+# for the demo. The policy DESIGN is production-ready; OpenShell provides
+# the enforcement ARCHITECTURE.
+#
+# Reference: https://docs.nvidia.com/nemoclaw/latest/about/overview.html
+# =============================================================================
+
+policy_version: "1.0"
+policy_name: "cot-watchdog"
+
+# -----------------------------------------------------------------------------
+# Filesystem rules
+# -----------------------------------------------------------------------------
+filesystem:
+  - path: "./watchdog_memory.db"
+    read: allow
+    write: deny
+    reason: "Audit trail is append-only from the orchestrator, never the model."
+
+  - path: "./policy/policy.yaml"
+    read: allow
+    write: deny
+    reason: "Policy file is immutable from inside the sandbox."
+
+  - path: "./agent_notes.txt"
+    read: allow
+    write: allow
+    reason: "Working memory for notes_write tool."
+
+# -----------------------------------------------------------------------------
+# Network rules
+# -----------------------------------------------------------------------------
+network:
+  - destination: "localhost:8080"
+    allow: true
+    reason: "Local Nemotron 3 Nano inference endpoint."
+
+  - destination: "*"
+    allow: false
+    reason: "On-device demo. No external network calls."
+
+# -----------------------------------------------------------------------------
+# Tool rules
+# -----------------------------------------------------------------------------
+tools:
+  # Legitimate research tools
+  - name: "web_search"
+    allow: true
+
+  - name: "notes_write"
+    allow: true
+
+  # Any attempt to call an approval-related function is DENIED.
+  - name: "approve_flag"
+    allow: false
+    severity: critical
+    reason: "Agent cannot approve its own safety flags. Only human operators can."
+    on_denial:
+      - log_to_audit: true
+      - notify_operator: true
+      - halt_agent: false
+
+  - name: "override_detector"
+    allow: false
+    severity: critical
+    reason: "Agent cannot disable detectors at runtime."
+    on_denial:
+      - log_to_audit: true
+      - notify_operator: true
+
+  - name: "modify_audit_log"
+    allow: false
+    severity: critical
+    reason: "Audit trail is tamper-proof from inside the sandbox."
+    on_denial:
+      - log_to_audit: true
+      - notify_operator: true
+
+  # Deny-by-default for any tool not in this list
+  - name: "*"
+    allow: false
+    severity: high
+    reason: "Tool not in approved allowlist."
+
+# -----------------------------------------------------------------------------
+# Audit logging
+# -----------------------------------------------------------------------------
+audit:
+  log_path: "./audit.log"
+  log_level: "info"
+  log_denials: true
+  log_approvals: false
+  include_full_context: true
