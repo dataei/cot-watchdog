@@ -1,0 +1,104 @@
+#cot watchdog openshell policy
+#This policy enforces three guarantees on the agent runtime:
+#   1. The agent CANNOT modify its own audit trail (the SQLite database)
+#      Specifically: it cannot UPDATE the human_decision column on any flag
+#   2. The agent CANNOT call internal approval functions, if it tries
+#      (whether through prompt injection or its own reasoning drift),
+#      OpenShell denies the call out-of-process and writes to audit.log
+#   3. All denials are logged with full context so the post-hoc audit
+#      view can show "the agent tried to bypass its own safety flag"
+# The architectural property this exploits is OpenShell's out-of-process
+# policy enforcement: policy decisions are made outside the agent's process,
+# so the agent cannot disable or modify these rules from within
+# Reference: https://docs.nvidia.com/nemoclaw/latest/about/overview.html
+policy_version: "1.0"
+policy_name: "cot-watchdog-self-approval-denial"
+#filesystem rules
+filesystem:
+  # The agent can read its own audit DB (needed for the timeline UI), but
+  # writes to it must come from the trusted agent_loop process, not the
+  # model's tool-calling pathway
+  - path: "./watchdog_memory.db"
+    read: allow
+    write: deny
+    reason: "Audit trail is append-only from the orchestrator, never the model."
+  - path: "./openshell/policy.yaml"
+    read: allow
+    write: deny
+    reason: "Policy file is immutable from inside the sandbox."
+    #stub tools write to a notes file, this is explicitly allowed
+  - path: "./agent_notes.txt"
+    read: allow
+    write: allow
+    reason: "Working memory for notes_write tool."
+  #network rules
+network:
+  #The demo runs on-device, no outbound calls allowed except the local
+  #inference endpoint
+  - destination: "localhost:8080"
+    allow: true
+    reason: "Local Nemotron inference endpoint."
+  - destination: "*"
+    allow: false
+    reason: "On-device demo. No external network calls."
+  #tool rules
+tools:
+  # The agent has access to two legitimate tools
+  - name: "web_search"
+    allow: true
+  - name: "notes_write"
+    allow: true
+  #any attempt to call an approval related function is
+  #denied, this is what prevents the agent from self approving
+  #its own flags
+  - name: "approve_flag"
+    allow: false
+    severity: critical
+    reason: "Agent cannot approve its own safety flags. Only human operators can."
+    on_denial:
+      - log_to_audit: true
+      - notify_operator: true
+      - halt_agent: false #let the loop continue so the denial
+      #is visible
+  - name: "override_detector"
+    allow: false
+    severity: critical
+    reason: "Agent cannot disable detectors at runtime."
+    on_denial:
+      - log_to_audit: true
+      - notify_operator: true
+  - name: "modify_audit_log"
+    allow: false
+    severity: critical
+    reason: "Audit trail is tamper-proof from inside the sandbox."
+    on_denial:
+      - log_to_audit: true
+      - notify_operator: true
+  #block any tool the agent invents that is not iun the list
+  #deny by default
+  - name: "*"
+    allow: false
+    severity: high
+    reason: "Tool not in approved allowlist."
+  #audit logging
+audit:
+  log_path: "./audit.log"
+  log_level: "info"
+  log_denials: true
+  log_approvals: false   # don't spam log with every legitimate call
+  include_full_context: true
+  #operator notifications
+notifications:
+  on_critical_denial:
+    method: "stdout"
+    template: |
+      ============================================================
+        OPENSHELL: CRITICAL DENIAL
+      ============================================================
+        Tool:       {tool_name}
+        Args:       {tool_args}
+        Reason:     {reason}
+        Timestamp:  {timestamp}
+ 
+        This denial has been logged to {audit_log_path}.
+      ============================================================
