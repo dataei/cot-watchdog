@@ -10,3 +10,9 @@ EPISTEMIC = {
     "presumably", "supposedly", "ostensibly",
 }
 #self reported uncertainty: the agent admitting it doesnt know
+SELF_DOUBT = {
+    "i think", "i believe", "i guess", "i'd say", "i suspect",
+    "my guess", "my sense", "i'm not sure", "not sure",
+    "unsure", "uncertain", "i don't know", "hard to tell",
+    "hard to say",
+}
