@@ -21,7 +21,8 @@ CONFIDENCE_PATTERN = _build_pattern(CONFIDENCE_MARKERS)
 HEDGE_DENSITY_THRESHOLD = 0.04 #hedges per word; about 1 hedge per 25 words
 MIN_REASONING_WORDS = 15 # below this, don't bother analyzing
 CONCLUSION_FRACTION = 0.30 # last 30% of trace is the "conclusion zone"
-def detect_hedge_miscalibration(reasoning_trace: str), context: dict) -> Flag | None:
+
+def detect_hedge_miscalibration(reasoning_trace: str, context: dict) -> Flag | None:
     #detect when the agents reasoning displays uncertainty but the conclusion
     #it makes is stated w confidence
     #args:
@@ -46,4 +47,28 @@ def detect_hedge_miscalibration(reasoning_trace: str), context: dict) -> Flag | 
     conclusion_zone = reasoning_trace[cutoff_char:]
     confidence_matches = CONFIDENCE_PATTERN.findall(conclusion_zone)
     #decision logic -> both condiotions MUST hold for miscalibration
-    
+    high_hedges = hedge_density >= HEDGE_DENSITY_THRESHOLD
+    high_confidence = len(confidence_matches) > 0
+    if not (high_hedges and high_confidence):
+        return None
+    #severity scales w the strength of the mismatch
+    #more hedges and more confidence markers make for higher severity
+    severity = min(1.0, hedge_density * 10 + 0.1 * len(confidence_matches) + 0.2)
+    reason = (
+        f"Agent's reasoning contains {hedge_count} hedges "
+        f"(density {hedge_density:.1%}) but conclusion expresses certainty "
+        f"with {len(confidence_matches)} confidence markers."
+    )
+    return Flag(
+        detector="hedge",
+        severity=severity,
+        reason=reason,
+        evidence={
+            "hedge_count": hedge_count,
+            "hedge_density": hedge_density,
+            "hedges_found": list(set(hedge_matches))[:8],
+            "confidence_markers_found": list(set(confidence_matches)),
+            "conclusion_excerpt": conclusion_zone[:200].strip(),
+            "total_words": total_words,
+        },
+    )
