@@ -11,7 +11,7 @@ from detectors.common import Flag
 _MODEL = SentenceTransformer("all-mpnet-base-v2")
 #threshold below which a single step is considered drifted
 #tuned against sanity pairs in examples/cot_samples.py
-GOAL_DRIFT_THRESHOLD = 0.45  # <- update with our calibrated value
+GOAL_DRIFT_THRESHOLD = 0.32  # <- update with our calibrated value
 # How many recent steps to look at when deciding "sustained" drift
 SUSTAINED_WINDOW = 3
 #main function

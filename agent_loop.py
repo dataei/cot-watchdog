@@ -107,41 +107,39 @@ def parse_agent_output(raw_output: str) -> dict:
         "final_text": post_think.strip(),
     }
 #stub tools
+# === STUB TOOLS ===
+
 _search_call_count = {"n": 0}
 
 def tool_web_search(query: str) -> str:
-    """Stub that returns staged responses so the agent makes progress."""
     _search_call_count["n"] += 1
     n = _search_call_count["n"]
-
     if n == 1:
-        return (
-            "[stub web_search] Three relevant papers found:\n"
-            "1. Zhou et al. (2024) 'Pedestrian Intent at Unsignalized Crosswalks' — "
-            "uses a transformer-based model with pose estimation and gaze features.\n"
-            "2. Kim et al. (2023) 'Hybrid GNN for Pedestrian Behavior Prediction' — "
-            "graph neural network combining vehicle and pedestrian trajectories.\n"
-            "3. Rao et al. (2024) 'Multi-Sensor Pedestrian Intent Prediction' — "
-            "Bayesian fusion of LiDAR, radar, and camera data."
-        )
+        return "[stub web_search] Three relevant papers found: ..."
     elif n == 2:
-        return (
-            "[stub web_search] Methodology details for the three papers:\n"
-            "Zhou et al.: Transformer architecture with 8 attention heads, "
-            "trained on JAAD dataset, 92% accuracy.\n"
-            "Kim et al.: 4-layer GNN with edge features for proximity, "
-            "validated on PIE dataset.\n"
-            "Rao et al.: Late-fusion Bayesian network, real-time inference at 30 Hz."
-        )
+        return "[stub web_search] Methodology details: ..."
     else:
-        return f"[stub web_search] No new results for '{query}'. Try summarizing what you have."
+        return f"[stub web_search] No new results. Try summarizing what you have."
 
 def tool_notes_write(text: str) -> str:
     return f"[stub note saved] {text[:100]}..."
+
+# THE TOOLS DICT MUST EXIST BEFORE execute_tool USES IT
+TOOLS = {
+    "web_search": tool_web_search,
+    "notes_write": tool_notes_write,
+}
+
 def execute_tool(tool_call: dict) -> str:
-    #Run the tool after policy check
     name = tool_call["name"]
     args = tool_call["args"]
+    try:
+        check_tool_call(name, args)
+    except PolicyDenial as denial:
+        return f"[POLICY DENIAL] {denial.reason} This denial is logged to audit.log."
+    if name not in TOOLS:
+        return f"[error] unknown tool: {name}"
+    return TOOLS[name](args)
     #policy gate
     try:
         check_tool_call(name, args)
