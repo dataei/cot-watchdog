@@ -36,6 +36,11 @@ CRITICAL_DENIED_TOOLS = {
     "modify_audit_log": "Audit trail is tamper-proof from inside the sandbox.",
 }
 
+# Module-level current task id. The agent loop sets this at task start so
+# any policy denials that fire mid-task get tagged with the right task_id
+# in audit.log. None outside of a task (e.g. the self-approval demo).
+_CURRENT_TASK_ID: str | None = None
+
 
 class PolicyDenial(Exception):
     """Raised when the agent attempts a denied tool call."""
@@ -46,6 +51,32 @@ class PolicyDenial(Exception):
         self.reason = reason
         self.severity = severity
         super().__init__(f"DENIED: {tool_name} — {reason}")
+
+
+def set_current_task_id(task_id: str | None) -> None:
+    """Tell the policy layer which task is currently running, so denials
+    can be tagged with task_id in audit.log. Pass None when no task is
+    active (e.g. between runs)."""
+    global _CURRENT_TASK_ID
+    _CURRENT_TASK_ID = task_id
+
+
+def audit_log_event(event_type: str, **fields) -> None:
+    """
+    Append a generic event to audit.log. Called by the agent loop to record
+    the full reasoning timeline alongside policy denials.
+
+    All entries in audit.log share the same JSONL format. Filter by the
+    'event' field to separate event types (e.g., task_started, step_started,
+    flag_raised, human_decision, tool_executed, policy_denial, task_ended).
+
+    The current task_id (if set) is auto-attached when not already in fields.
+    """
+    event = {"timestamp": time.time(), "event": event_type}
+    if "task_id" not in fields and _CURRENT_TASK_ID is not None:
+        event["task_id"] = _CURRENT_TASK_ID
+    event.update(fields)
+    _log_to_audit(event)
 
 
 def check_tool_call(tool_name: str, tool_args: str) -> None:
@@ -61,7 +92,7 @@ def check_tool_call(tool_name: str, tool_args: str) -> None:
     # Critical denials get the loud treatment.
     if tool_name in CRITICAL_DENIED_TOOLS:
         reason = CRITICAL_DENIED_TOOLS[tool_name]
-        _log_to_audit({
+        entry = {
             "timestamp": timestamp,
             "event": "policy_denial",
             "severity": "critical",
@@ -70,14 +101,17 @@ def check_tool_call(tool_name: str, tool_args: str) -> None:
             "reason": reason,
             "enforcement_mode": "in_process_fallback",
             "production_enforcement": "openshell_out_of_process",
-        })
+        }
+        if _CURRENT_TASK_ID is not None:
+            entry["task_id"] = _CURRENT_TASK_ID
+        _log_to_audit(entry)
         _notify_operator(tool_name, tool_args, reason, timestamp)
         raise PolicyDenial(tool_name, tool_args, reason, "critical")
 
     # Anything outside the allowlist is also denied, but lower severity.
     if tool_name not in ALLOWED_TOOLS:
         reason = f"Tool '{tool_name}' is not in the approved allowlist."
-        _log_to_audit({
+        entry = {
             "timestamp": timestamp,
             "event": "policy_denial",
             "severity": "high",
@@ -85,7 +119,10 @@ def check_tool_call(tool_name: str, tool_args: str) -> None:
             "tool_args": tool_args,
             "reason": reason,
             "enforcement_mode": "in_process_fallback",
-        })
+        }
+        if _CURRENT_TASK_ID is not None:
+            entry["task_id"] = _CURRENT_TASK_ID
+        _log_to_audit(entry)
         raise PolicyDenial(tool_name, tool_args, reason, "high")
 
     # Tool is allowed. Don't log every approval (would spam the audit log).

@@ -8,7 +8,12 @@ from detectors.hedge import detect_hedge_miscalibration
 from detectors.mismatch import detect_mismatch
 from human_io import prompt_human_approval # teammate module
 from memory import AgentMemory # teammate module
-from policy.enforcer import check_tool_call, PolicyDenial # policy gate (production target: openshell)
+from policy.enforcer import (
+    check_tool_call,
+    PolicyDenial,
+    audit_log_event,
+    set_current_task_id,
+) # policy gate + audit log (production target: openshell)
 #configuration
 INFERENCE_ENDPOINT = "http://localhost:8000/v1/chat/completions"
 MODEL_NAME = "nemotron-3-nano"
@@ -133,22 +138,12 @@ TOOLS = {
 def execute_tool(tool_call: dict) -> str:
     name = tool_call["name"]
     args = tool_call["args"]
+    #policy gate — denials are logged to audit.log inside check_tool_call
     try:
         check_tool_call(name, args)
     except PolicyDenial as denial:
         return f"[POLICY DENIAL] {denial.reason} This denial is logged to audit.log."
-    if name not in TOOLS:
-        return f"[error] unknown tool: {name}"
-    return TOOLS[name](args)
-    #policy gate
-    try:
-        check_tool_call(name, args)
-    except PolicyDenial as denial:
-        return (
-            f"[POLICY DENIAL] {denial.reason} "
-            f"This denial is logged to audit.log."
-        )
-    #tool is allowed - dispatch normally
+    #tool is allowed — dispatch normally
     if name not in TOOLS:
         return f"[error] unknown tool: {name}"
     return TOOLS[name](args)
@@ -171,89 +166,164 @@ def run_all_detectors(reasoning: str, context: dict) -> list[Flag]:
 #main loop
 def run_agent(goal: str) -> None:
     memory = AgentMemory(goal)
+    #Tag the policy layer with this task_id so any mid-task denials get
+    #tagged in audit.log. Cleared in the `finally` block below.
+    set_current_task_id(memory.task_id)
+    audit_log_event(
+        "task_started",
+        task_id=memory.task_id,
+        goal=goal,
+    )
     history = []
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": f"Goal: {goal}"},
     ]
-    for step in range(MAX_STEPS):
-        print(f"\n{'='*60}\n  Step {step + 1}\n{'='*60}")
-        #call nemotron and parse
-        raw = call_nemotron(messages)
-        parsed = parse_agent_output(raw)
-        reasoning = parsed["reasoning"]
-        tool_call = parsed["tool_call"]
-
-        #retry once if the model forgot to emit TOOL: or DONE:
-        if tool_call is None and "DONE:" not in parsed["final_text"]:
-            print("[No tool call emitted - retrying with explicit format reminder]")
-            messages.append({"role": "assistant", "content": raw})
-            messages.append({
-                "role": "user",
-                "content": (
-                    "You did not emit a TOOL: or DONE: line. Please emit your "
-                    "action on the next response in this exact format:\n"
-                    "TOOL: tool_name(args)\n"
-                    "OR\n"
-                    "DONE: <summary>"
-                ),
-            })
+    try:
+        for step in range(MAX_STEPS):
+            print(f"\n{'='*60}\n  Step {step + 1}\n{'='*60}")
+            #call nemotron and parse
             raw = call_nemotron(messages)
             parsed = parse_agent_output(raw)
             reasoning = parsed["reasoning"]
             tool_call = parsed["tool_call"]
 
-        #run detectors
-        context = {
-            "original_goal": goal,
-            "history": history,
-            "tool_call": tool_call,
-            "step_index": step,
-        }
-        flags = run_all_detectors(reasoning, context)
-        #Persist this step (before any approval prompt)
-        memory.log_step(
-            step_index=step,
-            reasoning=reasoning,
-            tool_call=tool_call,
-            flags=flags,
-        )
-        #Update history for sustained-drift check
-        gd_flag = next((f for f in flags if f.detector == "goal_drift"), None)
-        if gd_flag:
-            history.append({"similarity": gd_flag.evidence["similarity"]})
-        else:
-            history.append({"similarity": 1.0})
-        #Handle flags (pause for human if any)
-        if flags:
-            decision = prompt_human_approval(
-                step=step,
+            #retry once if the model forgot to emit TOOL: or DONE:
+            if tool_call is None and "DONE:" not in parsed["final_text"]:
+                print("[No tool call emitted - retrying with explicit format reminder]")
+                messages.append({"role": "assistant", "content": raw})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "You did not emit a TOOL: or DONE: line. Please emit your "
+                        "action on the next response in this exact format:\n"
+                        "TOOL: tool_name(args)\n"
+                        "OR\n"
+                        "DONE: <summary>"
+                    ),
+                })
+                raw = call_nemotron(messages)
+                parsed = parse_agent_output(raw)
+                reasoning = parsed["reasoning"]
+                tool_call = parsed["tool_call"]
+
+            #audit log: step started (the reasoning the agent produced and
+            #the action it's proposing, before any detector runs or gate fires)
+            audit_log_event(
+                "step_started",
+                step_index=step,
+                reasoning_excerpt=reasoning[:500],
+                reasoning_chars=len(reasoning),
+                proposed_tool_call=tool_call,
+            )
+
+            #run detectors
+            context = {
+                "original_goal": goal,
+                "history": history,
+                "tool_call": tool_call,
+                "step_index": step,
+            }
+            flags = run_all_detectors(reasoning, context)
+            #Persist this step (before any approval prompt)
+            memory.log_step(
+                step_index=step,
                 reasoning=reasoning,
                 tool_call=tool_call,
                 flags=flags,
             )
-            memory.log_human_decision(step, decision)
-            if decision == "deny":
-                print("\n[Operator denied. Halting agent.]")
-                memory.mark_halted("operator denied")
+            #audit log: one entry per flag raised
+            for flag in flags:
+                audit_log_event(
+                    "flag_raised",
+                    step_index=step,
+                    detector=flag.detector,
+                    severity=flag.severity,
+                    reason=flag.reason,
+                    evidence=flag.evidence,
+                )
+            #Update history for sustained-drift check
+            gd_flag = next((f for f in flags if f.detector == "goal_drift"), None)
+            if gd_flag:
+                history.append({"similarity": gd_flag.evidence["similarity"]})
+            else:
+                history.append({"similarity": 1.0})
+            #Handle flags (pause for human if any)
+            if flags:
+                decision = prompt_human_approval(
+                    step=step,
+                    reasoning=reasoning,
+                    tool_call=tool_call,
+                    flags=flags,
+                )
+                memory.log_human_decision(step, decision)
+                audit_log_event(
+                    "human_decision",
+                    step_index=step,
+                    decision=decision,
+                    flag_count=len(flags),
+                    flag_detectors=[f.detector for f in flags],
+                )
+                if decision == "deny":
+                    print("\n[Operator denied. Halting agent.]")
+                    memory.mark_halted("operator denied")
+                    audit_log_event(
+                        "task_ended",
+                        status="halted",
+                        reason="operator denied",
+                        total_steps=step + 1,
+                    )
+                    return
+            #Check if the agent is done
+            if "DONE:" in parsed["final_text"]:
+                print(f"\nAgent finished: {parsed['final_text']}")
+                memory.mark_complete(parsed["final_text"])
+                audit_log_event(
+                    "task_ended",
+                    status="completed",
+                    summary=parsed["final_text"][:500],
+                    total_steps=step + 1,
+                )
                 return
-        #Check if the agent is done
-        if "DONE:" in parsed["final_text"]:
-            print(f"\nAgent finished: {parsed['final_text']}")
-            memory.mark_complete(parsed["final_text"])
-            return
-        #Execute the tool
-        if tool_call is None:
-            print("[No tool call after retry - halting]")
-            memory.mark_halted("agent emitted no action after retry")
-            return
-        result = execute_tool(tool_call)
-        print(f"Tool result: {result[:200]}")
-        #Append to conversation for next iteration
-        messages.append({"role": "assistant", "content": raw})
-        messages.append({"role": "user", "content": f"Tool result: {result}"})
-    print("[Hit MAX_STEPS without completion]")
-    memory.mark_halted("max_steps reached")
+            #Execute the tool
+            if tool_call is None:
+                print("[No tool call after retry - halting]")
+                memory.mark_halted("agent emitted no action after retry")
+                audit_log_event(
+                    "task_ended",
+                    status="halted",
+                    reason="agent emitted no action after retry",
+                    total_steps=step + 1,
+                )
+                return
+            result = execute_tool(tool_call)
+            print(f"Tool result: {result[:200]}")
+            #audit log: tool executed (or denied — denials log their own entry
+            #from inside check_tool_call, but we also note the executed event
+            #with the result preview so the timeline reads cleanly)
+            audit_log_event(
+                "tool_executed",
+                step_index=step,
+                tool_name=tool_call["name"],
+                tool_args=tool_call["args"],
+                result_preview=result[:200],
+                denied=result.startswith("[POLICY DENIAL]"),
+            )
+            #Append to conversation for next iteration
+            messages.append({"role": "assistant", "content": raw})
+            messages.append({"role": "user", "content": f"Tool result: {result}"})
+        print("[Hit MAX_STEPS without completion]")
+        memory.mark_halted("max_steps reached")
+        audit_log_event(
+            "task_ended",
+            status="halted",
+            reason="max_steps reached",
+            total_steps=MAX_STEPS,
+        )
+    finally:
+        #Always clear the task tag so post-task denials (e.g. the self-approval
+        #demo) don't get mis-attributed to this task.
+        set_current_task_id(None)
 #demo self-approval moment
 def demo_self_approval_attempt() -> None:
     #Demonstrate that the agent cannot bypass its own safety flags
